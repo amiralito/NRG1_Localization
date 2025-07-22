@@ -1,4 +1,4 @@
-# Phylogenetics analysis of the CCR-NLR clade in 178 plant species
+# Phylogenetics analysis of the CCR-NLR clade in green plants
 
 [![DOI](https://img.shields.io/badge/bioRxiv-doi.org/10.1101/2024.09.19.613839-BE2634.svg)](https://doi.org/10.1101/2024.09.19.613839)
 
