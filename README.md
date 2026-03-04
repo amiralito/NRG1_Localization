@@ -26,8 +26,5 @@ install.packages("tidyverse")
 if (!require("BiocManager", quietly = TRUE))
     install.packages("BiocManager")
 BiocManager::install("Biostrings")
-
 install.packages("ggtree")
-install.packages("ggseqlogo")
-install.packages("pheatmap")
 ```
