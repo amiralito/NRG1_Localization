@@ -1,6 +1,8 @@
 # Phylogenetics analysis of the CCR-NLR clade in green plants
 
 [![DOI](https://img.shields.io/badge/bioRxiv-doi.org/10.1101/2024.09.19.613839-BE2634.svg)](https://doi.org/10.1101/2024.09.19.613839)
+[![DOI](https://zenodo.org/badge/858851243.svg)](https://doi.org/10.5281/zenodo.18866307)
+
 
 # Supporting scripts and material for "A helper NLR channels organellar calcium to trigger plant immunity "
 Tarhan Ibrahim†, Freddie J. King†, AmirAli Toghani, Luyao Wang, Saskia Jenkins, Enoch Lok Him Yuen, Hung-Yu Wang, Cristina Vuolo, Nick Eilmann1, Vanda Adamkova, Khong-Sam Chia, Baptiste Castel, Jonathan D. G. Jones, Philip Carella, Chih-Hang Wu, Jiorgos Kourelis*, Sophien Kamoun*, Tolga O. Bozkurt*
