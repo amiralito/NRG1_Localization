@@ -24,18 +24,9 @@ library(plotly)
 
 ## 1. Process the taxonomy and metadata:
 ```{r}
-# import the all plant taxonomy data
-viridiplantae_taxonomy <- read_tsv("/path/to/Viridiplantae_taxonomy.tsv")
-
-# import RefSeq metadata
-RefSeq_metadata <- read_tsv("/path/to/RefSeq_metadata.tsv")
-
-# extract the RefSeq taxonomy
-RefSeq_taxonomy <- viridiplantae_taxonomy[viridiplantae_taxonomy$`Tax name` %in% RefSeq_metadata$`Organism Name`,]
-
 
 # merge metadata and taxonomy
-RefSeq_taxonomy_metadata <- RefSeq_metadata %>% left_join(RefSeq_taxonomy, join_by(`Organism Name` == `Tax name`))
+RefSeq_taxonomy_metadata <- read_xlsx("/path/to/Data_S1.xlsx)
 
 species_meta <- RefSeq_taxonomy_metadata[,c(1,3,40,46,47)]
 
