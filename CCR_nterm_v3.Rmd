@@ -1,0 +1,544 @@
+---
+title: "CCR_nterm_v3"
+author: "AmirAli Toghani"
+date: "2025-06-21"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+library(tidyverse)
+library(readr)
+library(Biostrings)
+library(readxl)
+library(ggtree)
+library(bio3d)
+library(ggseqlogo)
+library(pheatmap)
+library(scales)
+library(ggridges)
+library(plotly)
+
+```
+
+## 1. Process the taxonomy and metadata:
+```{r}
+# import the all plant taxonomy data
+viridiplantae_taxonomy <- read_tsv("/path/to/Viridiplantae_taxonomy.tsv")
+
+# import RefSeq metadata
+RefSeq_metadata <- read_tsv("/path/to/RefSeq_metadata.tsv")
+
+# extract the RefSeq taxonomy
+RefSeq_taxonomy <- viridiplantae_taxonomy[viridiplantae_taxonomy$`Tax name` %in% RefSeq_metadata$`Organism Name`,]
+
+
+# merge metadata and taxonomy
+RefSeq_taxonomy_metadata <- RefSeq_metadata %>% left_join(RefSeq_taxonomy, join_by(`Organism Name` == `Tax name`))
+
+species_meta <- RefSeq_taxonomy_metadata[,c(1,3,40,46,47)]
+
+```
+
+## 2. Import metadata and sequences:
+```{r}
+setwd("/path/to/nlrtracker")
+
+RefSeq_files <- list.files(pattern = "_Domains.tsv", recursive = T)
+
+RefSeq_list <- list()
+
+# Loop through each file
+for (i in seq_along(RefSeq_files)) {
+  # Read the Excel file
+  RefSeq_list[[i]] <- read_delim(RefSeq_files[i])
+  
+  # Extract the specific part of the file name and add it as a new column
+  RefSeq_list[[i]] <- RefSeq_list[[i]] %>%
+    mutate('Assembly Accession' = gsub(".*_(GCA|GCF)_([0-9]+\\.[0-9]+)_.*", "\\1_\\2", basename(RefSeq_files[i])))
+
+  # Print a message for each file (optional)
+  cat("Read file:", RefSeq_files[i], "and added formatted filename column\n")
+}
+
+
+# merge all and add the metadata
+RefSeq_NLRtracker <- do.call(rbind,RefSeq_list) %>% inner_join(species_meta, by = "Assembly Accession")
+
+
+RefSeq_NLRtracker <- RefSeq_NLRtracker %>% 
+  mutate(ID = paste(`Order name`,`Organism Name`, seqname, Simple, sep = "_")) %>%
+  # Replace spaces in the "Species" column with underscores for the "ID" column
+  mutate(ID = gsub(" ", "_", ID))
+
+```
+
+
+## 3. Prepare the functions and prerequisites:
+```{r}
+# Function to remove duplicates based on "sequence" column
+remove_duplicates_by_sequence <- function(df) {
+  # Filter out rows with duplicate "sequence" values
+  df %>% distinct(sequence, .keep_all = TRUE)
+}
+
+domains <- c("CNL","CNLO","CN","OCNL","CONL",
+             "NL","NLO","ONL",
+             "BCNL","BNL","BCN","BCCNL","BNLO","BOCNL",
+             "RNL",
+             "TN","TNL","TNLO","TNLJ")
+
+```
+
+## 4. Process the data:
+```{r}
+# extract the full-length NLRs
+RefSeq_NLR <- filter(RefSeq_NLRtracker, RefSeq_NLRtracker$type == "CHAIN" & RefSeq_NLRtracker$Status == "NLR")
+
+# only keep the desired domain architectures and deduplicate NLRs
+RefSeq_NLR_filtered <- RefSeq_NLR[RefSeq_NLR$Simple %in% domains,]
+
+RefSeq_NLR_filtered_deduplicated <- remove_duplicates_by_sequence(RefSeq_NLR_filtered)
+
+
+
+# extract the NBARC domains
+RefSeq_NBARC <- RefSeq_NLRtracker[RefSeq_NLRtracker$description == "NBARC",]
+
+RefSeq_NBARC_filtered_deduplicated <- RefSeq_NBARC[RefSeq_NBARC$ID %in% RefSeq_NLR_filtered_deduplicated$ID,]
+
+
+# filter out NLRs with truncated NBARC domain
+
+RefSeq_NBARC_filtered_deduplicated_len <- filter(RefSeq_NBARC_filtered_deduplicated, 
+                                                              RefSeq_NBARC_filtered_deduplicated$end - RefSeq_NBARC_filtered_deduplicated$start > 250 &
+                                                              RefSeq_NBARC_filtered_deduplicated$end - RefSeq_NBARC_filtered_deduplicated$start < 400)
+
+
+RefSeq_NLR_filtered_deduplicated_len <- RefSeq_NLR_filtered_deduplicated[RefSeq_NLR_filtered_deduplicated$seqname %in% RefSeq_NBARC_filtered_deduplicated_len$seqname,]
+
+# convert the final data to biostring objects
+
+RefSeq_NLR_filtered_deduplicated_len_seq <- AAStringSet(RefSeq_NLR_filtered_deduplicated_len$sequence)
+RefSeq_NLR_filtered_deduplicated_len_seq@ranges@NAMES <- RefSeq_NLR_filtered_deduplicated_len$ID
+
+
+RefSeq_NBARC_filtered_deduplicated_len_seq <- AAStringSet(RefSeq_NBARC_filtered_deduplicated_len$sequence)
+RefSeq_NBARC_filtered_deduplicated_len_seq@ranges@NAMES <- RefSeq_NBARC_filtered_deduplicated_len$ID
+
+```
+
+
+## 5. Import RefPlantNLR and add it to the datasets and export:
+
+```{r}
+
+RefPlantNLR <- readAAStringSet("/path/to/RefPlantNLR.fasta")
+RefPlantNLR_NBARC <- readAAStringSet("/path/to/RefPlantNLR_NBARC.fasta")
+
+all_ref <- c(RefSeq_NLR_filtered_deduplicated_len_seq, RefPlantNLR)
+all_ref_NBARC <- c(RefSeq_NBARC_filtered_deduplicated_len_seq, RefPlantNLR_NBARC)
+
+writeXStringSet(all_ref_NBARC,"/path/to/all_ref_nbarc.fasta")
+writeXStringSet(all_ref,"/path/to/all_ref.fasta")
+
+# extract ZAR1 as the outgroup for smaller clades
+
+ZAR1 <- RefPlantNLR[c("ZAR1","NbZAR1")]
+ZAR1_NBARC <- RefPlantNLR_NBARC[c("ZAR1","NbZAR1")]
+
+NRC <- all_ref[c("NRC0","NRC1","NRC2","NRC3","NRC4a","NRC4b","NRC6")]
+NRC_NBARC <- all_ref_NBARC[c("NRC0","NRC1","NRC2","NRC3","NRC4a","NRC4b","NRC6")]
+
+NRG1 <- RefPlantNLR[c("NRG1","AtNRG1.1","AtNRG1.2","AtNRG1.3")]
+NRG1_NBARC <- RefPlantNLR_NBARC[c("NRG1","AtNRG1.1","AtNRG1.2")]
+
+ADR1 <- RefPlantNLR[c("ADR1","NbADR1","ADR1-L1","ADR1-L2","ADR1-L3")]
+ADR1_NBARC <- RefPlantNLR_NBARC[c("ADR1","NbADR1","ADR1-L1","ADR1-L2","ADR1-L3")]
+
+
+NRG1_RPW8 <- readAAStringSet("/path/to/NRG1_RPW8.fasta")
+ADR1_RPW8 <- readAAStringSet("/path/to/ADR1_RPW8.fasta")
+
+```
+
+
+## 6. Import the CCR tree and extract the CCRs:
+```{r}
+CCR_clade <- read.tree("~/Desktop/CCR_nterm/analysis/phylogeny/CCR_clade.tree")
+
+CCR_meta <- RefSeq_NLR_filtered_deduplicated_len[RefSeq_NLR_filtered_deduplicated_len$ID %in% CCR_clade$tip.label,]
+CCR_NBARC_meta <- RefSeq_NBARC_filtered_deduplicated_len[RefSeq_NBARC_filtered_deduplicated_len$ID %in% CCR_clade$tip.label,]
+
+write_csv(CCR_meta,"/path/to/CCR_meta.csv")
+write_csv(CCR_NBARC_meta,"/path/to/CCR_NBARC_meta.csv")
+
+
+CCR_seq <- AAStringSet(CCR_meta$sequence)
+CCR_seq@ranges@NAMES <- CCR_meta$ID
+writeXStringSet(CCR_seq, "/path/to/CCR.fasta")
+
+CCR_NBARC_seq <- AAStringSet(CCR_NBARC_meta$sequence)
+CCR_NBARC_seq@ranges@NAMES <- CCR_NBARC_meta$ID
+writeXStringSet(CCR_NBARC_seq, "/path/to/CCR_NBARC.fasta")
+
+
+CCR_RPW8_seq <- subseq(CCR_seq, start = 1, end = CCR_NBARC_meta$start)
+CCR_RPW8_seq_filtered <- CCR_RPW8_seq[CCR_RPW8_seq@ranges@width > 100]
+writeXStringSet(CCR_RPW8_seq, "/path/to/CCR_RPW8.fasta")
+writeXStringSet(CCR_RPW8_seq_filtered, "/path/to/CCR_RPW8_filtered.fasta")
+
+
+# add reference sequences and export as well
+c(CCR_seq, NRG1, ADR1, NRC, ZAR1) %>% writeXStringSet("/path/to/CCR_ref.fasta")
+
+c(CCR_NBARC_seq, NRG1_NBARC, ADR1_NBARC, NRC_NBARC, ZAR1_NBARC) %>% writeXStringSet("/path/to/CCR_NBARC_ref.fasta")
+
+
+```
+
+## 7. Import data from Chia et al.
+
+```{r}
+
+Chia_NLRtracker <- read_xlsx("/path/to/Supplemental Data Set S1.xlsx", sheet = "4. NLR domains")
+
+Chia_NLRtracker <- Chia_NLRtracker %>% 
+  mutate(ID = paste(Lineage, Genus, Species, seqname, Simple, sep = "_")) %>%
+  # Replace spaces in the "Species" column with underscores for the "ID" column
+  mutate(ID = gsub(" ", "_", ID))
+
+Chia_NLR <- filter(Chia_NLRtracker, Chia_NLRtracker$type == "CHAIN" & Chia_NLRtracker$Status == "NLR")
+Chia_NLR_new <- Chia_NLR[!Chia_NLR$seqname %in% RefPlantNLR@ranges@NAMES,]
+Chia_NLR_new_deduplicated <- remove_duplicates_by_sequence(Chia_NLR_new)
+
+Chia_NBARC <- filter(Chia_NLRtracker, Chia_NLRtracker$description == "NBARC" & Chia_NLRtracker$Status == "NLR")
+Chia_NBARC_new <- Chia_NBARC[!Chia_NBARC$seqname %in% RefPlantNLR_NBARC@ranges@NAMES,]
+Chia_NBARC_new_duduplicated <- Chia_NBARC_new[Chia_NBARC_new$ID %in% Chia_NLR_new_deduplicated$ID,]
+
+
+Chia_RNL <- Chia_NLR_new_deduplicated[Chia_NLR_new_deduplicated$Simple == "RNL",]
+Chia_RNL_seq <- AAStringSet(Chia_RNL$sequence)
+Chia_RNL_seq@ranges@NAMES <- Chia_RNL$ID
+
+Chia_RNL_NBARC <- Chia_NBARC_new_duduplicated[match(Chia_RNL$ID, Chia_NBARC_new_duduplicated$ID),]
+Chia_RNL_NBARC_seq <- AAStringSet(Chia_RNL_NBARC$sequence)
+Chia_RNL_NBARC_seq@ranges@NAMES <- Chia_RNL_NBARC$ID
+
+
+```
+
+#### Extract the RPW8 domain:
+```{r}
+
+Chia_RPW8_seq <- subseq(Chia_RNL_seq, start = 1, end = Chia_RNL_NBARC$start)
+Chia_RPW8_seq_filtered <- Chia_RPW8_seq[Chia_RPW8_seq@ranges@width > 100]
+writeXStringSet(Chia_RPW8_seq, "/path/to/meme_nonflowering/Chia_RPW8.fasta")
+writeXStringSet(Chia_RPW8_seq_filtered, "/path/to/meme_nonflowering/Chia_RPW8_filtered.fasta")
+
+# merge with RefSeq RPW8 domains
+RPW8_all <- c(CCR_RPW8_seq_filtered, Chia_RPW8_seq_filtered, NRG1_RPW8, ADR1_RPW8)
+
+```
+
+#### Export for phylogenetic analysis:
+```{r}
+Chia_ref_out <- c(Chia_RNL_seq, CCR_seq, NRG1, ADR1, NRC, ZAR1)
+writeXStringSet(Chia_ref_out, "/path/to/phylogeny_nonflowering/Chia_ref_out.fasta")
+
+
+Chia_NBARC_ref_out <- c(Chia_RNL_NBARC_seq, CCR_NBARC_seq, NRG1_NBARC, ADR1_NBARC, NRC_NBARC, ZAR1_NBARC)
+writeXStringSet(Chia_NBARC_ref_out, "/path/to/phylogeny_nonflowering/Chia_NBARC_ref_out.fasta")
+
+```
+
+## 8. Import the subclades and extract the RPW8 domain:
+
+```{r}
+
+clade1 <- read.tree("/path/to/phylogeny_nonflowering/subclades/clade1.tree")
+clade2 <- read.tree("/path/to/phylogeny_nonflowering/subclades/clade2.tree")
+clade3 <- read.tree("/path/to/phylogeny_nonflowering/subclades/clade3.tree")
+clade4 <- read.tree("/path/to/phylogeny_nonflowering/subclades/clade4.tree")
+
+clade1_RPW8 <- RPW8_all[RPW8_all@ranges@NAMES %in% clade1$tip.label]
+writeXStringSet(clade1_RPW8, "/path/to/meme_nonflowering/clade1_RPW8.fasta")
+
+clade2_RPW8 <- RPW8_all[RPW8_all@ranges@NAMES %in% clade2$tip.label]
+writeXStringSet(clade2_RPW8, "/path/to/meme_nonflowering/clade2_RPW8.fasta")
+
+clade3_RPW8 <- RPW8_all[RPW8_all@ranges@NAMES %in% clade3$tip.label]
+writeXStringSet(clade3_RPW8, "/path/to/meme_nonflowering/clade3_RPW8.fasta")
+
+clade4_RPW8 <- RPW8_all[RPW8_all@ranges@NAMES %in% clade4$tip.label]
+writeXStringSet(clade4_RPW8, "/path/to/meme_nonflowering/clade4_RPW8.fasta")
+
+
+```
+
+## 9. Import the N-term motifs and generate logo plots:
+```{r}
+theme_custom <- theme(
+  axis.text.x = element_blank(),
+  axis.text.y = element_blank(),
+  axis.ticks = element_blank(),
+  axis.title = element_blank(),
+  legend.position = "none",
+  panel.background = element_rect(fill = "transparent", colour = NA), # No fill, no border
+  plot.background = element_rect(fill = "transparent", colour = NA), # No fill, no border
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  plot.margin = unit(c(0,0,0,0), "lines"),
+  plot.title = element_blank(),
+  plot.subtitle = element_blank(),
+  plot.caption = element_blank(),
+  panel.border = element_blank()
+)
+
+
+
+color_scheme <- make_col_scheme(chars = c("K","R","H",
+                                          "D","E",
+                                          "A","V","L","I","W","F","M","Y",
+                                          "S","T","N","Q",
+                                          "P","C","G"),
+                                groups = c("1","1","1",
+                                           "2","2",
+                                           "3","3","3","3","3","3","3","3",
+                                           "4","4","4","4",
+                                           "5","5","5"),
+                                cols = c("#FF1F1F","#FF1F1F","#FF1F1F",
+                                         "#CC00CC","#CC00CC",
+                                         "#3333FF","#3333FF","#3333FF","#3333FF","#3333FF","#3333FF","#3333FF","#3333FF",
+                                         "#1FFF1F","#1FFF1F","#1FFF1F","#1FFF1F",
+                                         "#FFAE00","#FFAE00","#FFAE00"))
+
+theme_custom2 <- theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  legend.position = "none",
+  panel.background = element_blank(),
+  plot.background = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  plot.title = element_blank(),
+  plot.subtitle = element_blank(),
+  plot.caption = element_blank(),
+  axis.line = element_line(colour = "black", size = 0.25)
+)
+
+```
+
+```{r}
+clade1_nterm_motif_seq <- readAAStringSet("/path/to/hmm_nonflowering/profiles/clade1.txt")
+
+clade1_nterm_motif_df <- as.data.frame(clade1_nterm_motif_seq)
+
+
+
+clade2a_nterm_motif_seq <- readAAStringSet("/path/to/hmm_nonflowering/profiles/clade2a.txt")
+
+clade2a_nterm_motif_df <- as.data.frame(clade2a_nterm_motif_seq)
+
+
+
+clade2b_nterm_motif_seq <- readAAStringSet("/path/to/hmm_nonflowering/profiles/clade2b.txt")
+
+clade2b_nterm_motif_df <- as.data.frame(clade2b_nterm_motif_seq)
+
+
+
+clade3_nterm_motif_seq <- readAAStringSet("/path/to/hmm_nonflowering/profiles/clade3.txt")
+
+clade3_nterm_motif_df <- as.data.frame(clade3_nterm_motif_seq)
+
+
+
+clade4_nterm_motif_seq <- readAAStringSet("/path/to/hmm_nonflowering/profiles/clade4.txt")
+
+clade4_nterm_motif_df <- as.data.frame(clade4_nterm_motif_seq)
+
+
+
+## Plot it
+
+clade1_nterm_motif_p <- ggplot() +
+    geom_logo(clade1_nterm_motif_df, col_scheme = color_scheme) +
+    theme_light() +
+    theme_custom
+  
+ggsave("/path/to/clade1_nterm.svg", clade1_nterm_motif_p, width = 30, height = 2)
+
+
+
+clade2a_nterm_motif_p <- ggplot() +
+    geom_logo(clade2a_nterm_motif_df, col_scheme = color_scheme) +
+    theme_light() +
+    theme_custom
+  
+ggsave("/path/to/clade2a_nterm.svg", clade2a_nterm_motif_p, width = 30, height = 2)
+
+
+
+clade2b_nterm_motif_p <- ggplot() +
+    geom_logo(clade2b_nterm_motif_df, col_scheme = color_scheme) +
+    theme_light() +
+    theme_custom
+  
+ggsave("/path/to/clade2b_nterm.svg", clade2b_nterm_motif_p, width = 24, height = 2)
+
+
+
+clade3_nterm_motif_p <- ggplot() +
+    geom_logo(clade3_nterm_motif_df, col_scheme = color_scheme) +
+    theme_light() +
+    theme_custom
+  
+ggsave("/path/to/clade3_nterm.svg", clade3_nterm_motif_p, width = 21, height = 2)
+
+
+
+clade4_nterm_motif_p <- ggplot() +
+    geom_logo(clade4_nterm_motif_df, col_scheme = color_scheme) +
+    theme_light() +
+    theme_custom
+  
+ggsave("/path/to/clade4_nterm.svg", clade4_nterm_motif_p, width = 15, height = 2)
+
+
+```
+
+
+
+## 10. Import the HMMsearch outputs:
+
+```{r}
+# clade 1
+clade1_tbl <- read_table("/path/to/hmm_nonflowering/clade1_tbl.out",
+                       col_names = FALSE, col_types = cols(X19 = col_skip()), 
+                       skip = 3) %>% head(-10)
+
+clade1_tbl$X5 <- as.numeric(clade1_tbl$X5)
+
+clade1_tbl <- filter(clade1_tbl, clade1_tbl$X5 <= 0.01) # keep the significant ones
+clade1_hmm <- clade1_tbl[,c(1,6)] %>% set_names(c("ID","clade1"))
+clade1_hmm$clade1 <- as.numeric(clade1_hmm$clade1)
+
+# clade 2a
+clade2a_tbl <- read_table("/path/to/hmm_nonflowering/clade2a_tbl.out",
+                       col_names = FALSE, col_types = cols(X19 = col_skip()), 
+                       skip = 3) %>% head(-10)
+
+clade2a_tbl$X5 <- as.numeric(clade2a_tbl$X5)
+
+clade2a_tbl <- filter(clade2a_tbl, clade2a_tbl$X5 <= 0.01) # keep the significant ones
+clade2a_hmm <- clade2a_tbl[,c(1,6)] %>% set_names(c("ID","clade2a"))
+clade2a_hmm$clade2a <- as.numeric(clade2a_hmm$clade2a)
+
+# clade 2b
+clade2b_tbl <- read_table("/path/to/hmm_nonflowering/clade2b_tbl.out",
+                       col_names = FALSE, col_types = cols(X19 = col_skip()), 
+                       skip = 3) %>% head(-10)
+
+clade2b_tbl$X5 <- as.numeric(clade2b_tbl$X5)
+
+clade2b_tbl <- filter(clade2b_tbl, clade2b_tbl$X5 <= 0.01) # keep the significant ones
+clade2b_hmm <- clade2b_tbl[,c(1,6)] %>% set_names(c("ID","clade2b"))
+clade2b_hmm$clade2b <- as.numeric(clade2b_hmm$clade2b)
+
+# clade 3
+clade3_tbl <- read_table("/path/to/hmm_nonflowering/clade3_tbl.out",
+                       col_names = FALSE, col_types = cols(X19 = col_skip()), 
+                       skip = 3) %>% head(-10)
+
+clade3_tbl$X5 <- as.numeric(clade3_tbl$X5)
+
+clade3_tbl <- filter(clade3_tbl, clade3_tbl$X5 <= 0.01) # keep the significant ones
+clade3_hmm <- clade3_tbl[,c(1,6)] %>% set_names(c("ID","clade3"))
+clade3_hmm$clade3 <- as.numeric(clade3_hmm$clade3)
+
+# clade 4
+clade4_tbl <- read_table("/path/to/hmm_nonflowering/clade4_tbl.out",
+                       col_names = FALSE, col_types = cols(X19 = col_skip()), 
+                       skip = 3) %>% head(-10)
+
+clade4_tbl$X5 <- as.numeric(clade4_tbl$X5)
+
+clade4_tbl <- filter(clade4_tbl, clade4_tbl$X5 <= 0.01) # keep the significant ones
+clade4_hmm <- clade4_tbl[,c(1,6)] %>% set_names(c("ID","clade4"))
+clade4_hmm$clade4 <- as.numeric(clade4_hmm$clade4)
+
+# MADA
+MADA_tbl <- read_table("/path/to/hmm_nonflowering/MADA_tbl.out",
+                       col_names = FALSE, col_types = cols(X19 = col_skip()), 
+                       skip = 3) %>% head(-10)
+
+MADA_tbl$X5 <- as.numeric(MADA_tbl$X5)
+
+MADA_tbl <- filter(MADA_tbl, MADA_tbl$X5 <= 0.01) # keep the significant ones
+MADA_hmm <- MADA_tbl[,c(1,6)] %>% set_names(c("ID","MADA"))
+MADA_hmm$MADA <- as.numeric(MADA_hmm$MADA)
+
+```
+
+
+## 11. Import the sorted final tree and generate the hmm matrix:
+```{r}
+Chia_ref_out_tree <- read.tree("/path/to/hmm_nonflowering/Chia_NBARC_ref_out_trimmed_rooted_sorted.afa.tree.txt")
+Chia_ref_out_IDs <- Chia_ref_out_tree$tip.label %>% as.data.frame() %>% set_names("ID")
+
+HMM_matrix <- Reduce(function(x,y) merge(x,y, by = "ID", all = TRUE), list(Chia_ref_out_IDs, clade1_hmm, clade2a_hmm, clade2b_hmm, clade3_hmm, clade4_hmm, MADA_hmm))
+
+HMM_matrix[is.na(HMM_matrix)] <- 0
+
+# reorder the matrix
+HMM_matrix <- HMM_matrix[match(Chia_ref_out_IDs$ID, HMM_matrix$ID),]
+```
+
+```{r}
+# plot it
+
+HMM_matrix <- HMM_matrix %>% 
+  mutate(ID = factor(ID, levels = ID)) %>%
+  mutate(sort = 1218:1)
+
+HMM_matrix_melted <- HMM_matrix %>% 
+  pivot_longer(cols = c(clade1, clade2a, clade2b, clade3, clade4, MADA))
+
+HMM_matrix_melted$ID <- factor(HMM_matrix_melted$ID, levels = rev(unique(HMM_matrix_melted$ID)))
+
+HMM_matrix_melted <- HMM_matrix_melted %>% mutate(binary = case_when(value > 0 ~ 1,
+                                                                            value == 0 ~ 0))
+
+
+
+HMM_matrix_p <- ggplot(HMM_matrix_melted, aes(x = value, y = sort)) +
+  geom_segment(aes(x = 0, xend = value, y = sort, yend = sort, color = name)) +
+  ylim(c(0,1218)) +
+  xlim(c(0,80)) +
+  facet_wrap(~ name, ncol = 6) +
+  scale_color_manual(values = c("clade1" = "#616594", "clade2a" = "#999ec5", "clade2b" = "#9b89b8", "clade3" = "#efa6c9", "clade4" = "#ecc3dc")) +
+  theme_linedraw(base_size = 10)
+
+HMM_matrix_p
+
+ggsave(plot = HMM_matrix_p, filename =  "/path/to/hmm_matrix.svg", width = 8, height = 10, dpi = "retina")
+
+```
+
+## 12. import the Vicia faba and Glycine sojae RNL sequences and prepare for phylogenetic analysis:
+```{r}
+
+ext_RNL <- readAAStringSet("/path/to/ext_RNL.fasta")
+
+ext_RNL_NBARC <- readAAStringSet("/path/to/ext_RNL_NBARC.fasta")
+
+# export for phylogenetic analysis
+ext_RNL_ref_out <- c(Chia_RNL_seq, CCR_seq, ext_RNL, NRG1, ADR1, NRC, ZAR1)
+
+ext_RNL_NBARC_ref_out <- c(Chia_RNL_NBARC_seq, CCR_NBARC_seq, ext_RNL_NBARC, NRG1_NBARC, ADR1_NBARC, NRC_NBARC, ZAR1_NBARC)
+writeXStringSet(ext_RNL_NBARC_ref_out, "~/path/to/pylogeny_ext/ext_RNL_NBARC_ref_out.fasta")
+
+```
+
